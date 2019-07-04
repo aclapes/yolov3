@@ -131,7 +131,8 @@ class LoadWebcam:  # for inference
 
 
 class LoadImagesAndLabels(Dataset):  # for training/testing
-    def __init__(self, path, img_size=416, batch_size=16, augment=False, rect=True, image_weights=False):
+    def __init__(self, path, img_size=416, batch_size=16, augment=False, rect=True, image_weights=False,
+                 apply_cmap=True):
         with open(path, 'r') as f:
             img_files = f.read().splitlines()
             self.img_files = list(filter(lambda x: len(x) > 0, img_files))
@@ -147,6 +148,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         self.augment = augment
         self.image_weights = image_weights
         self.rect = False if image_weights else rect
+        self.apply_cmap = apply_cmap
 
         # Define labels
         self.label_files = [x.replace('images', 'labels') for x in self.img_files]
@@ -323,6 +325,14 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         labels_out = torch.zeros((nL, 6))
         if nL:
             labels_out[:, 1:] = torch.from_numpy(labels)
+
+        if len(img.shape) == 2 or img.shape[2] == 1:
+            src = img if len(img.shape) == 2 else img[:, :, 0]
+            dst = cv2.normalize(src, None, alpha=0.0, beta=255.0, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8UC1)
+            if not self.apply_cmap:
+                img = dst[:, :, np.newaxis]
+            else:
+                img = cv2.applyColorMap(dst, colormap=cv2.COLORMAP_JET)
 
         # Normalize
         img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416

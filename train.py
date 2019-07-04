@@ -11,20 +11,33 @@ from models import *
 from utils.datasets import *
 from utils.utils import *
 
-#      0.149      0.241      0.126      0.156       6.85      1.008      1.421    0.07989      16.94      6.215      10.61      4.272      0.251      0.001         -4        0.9     0.0005   320 64-1 giou
-#      0.111       0.27      0.132      0.131       3.96      1.276     0.3156     0.1425      21.21      6.224      11.59       8.83      0.376      0.001         -4        0.9     0.0005
-hyp = {'giou': 1.008,  # giou loss gain
-       'xy': 1.421,  # xy loss gain
-       'wh': 0.07989,  # wh loss gain
-       'cls': 16.94,  # cls loss gain
-       'cls_pw': 6.215,  # cls BCELoss positive_weight
-       'conf': 10.61,  # conf loss gain
-       'conf_pw': 4.272,  # conf BCELoss positive_weight
-       'iou_t': 0.251,  # iou target-anchor training threshold
+hyp = {'giou': 1.0,  # giou loss gain
+       'xy': 1.0,  # xy loss gain
+       'wh': 1.0,  # wh loss gain
+       'cls': 1.0,  # cls loss gain
+       'cls_pw': 1.0,  # cls BCELoss positive_weight
+       'conf': 1.0,  # conf loss gain
+       'conf_pw': 1.0,  # conf BCELoss positive_weight
+       'iou_t': 0.25,  # iou target-anchor training threshold
        'lr0': 0.001,  # initial learning rate
        'lrf': -4.,  # final learning rate = lr0 * (10 ** lrf)
        'momentum': 0.90,  # SGD momentum
        'weight_decay': 0.0005}  # optimizer weight decay
+
+#      0.149      0.241      0.126      0.156       6.85      1.008      1.421    0.07989      16.94      6.215      10.61      4.272      0.251      0.001         -4        0.9     0.0005   320 64-1 giou
+#      0.111       0.27      0.132      0.131       3.96      1.276     0.3156     0.1425      21.21      6.224      11.59       8.83      0.376      0.001         -4        0.9     0.0005
+# hyp = {'giou': 1.008,  # giou loss gain
+#        'xy': 1.421,  # xy loss gain
+#        'wh': 0.07989,  # wh loss gain
+#        'cls': 16.94,  # cls loss gain
+#        'cls_pw': 6.215,  # cls BCELoss positive_weight
+#        'conf': 10.61,  # conf loss gain
+#        'conf_pw': 4.272,  # conf BCELoss positive_weight
+#        'iou_t': 0.251,  # iou target-anchor training threshold
+#        'lr0': 0.001,  # initial learning rate
+#        'lrf': -4.,  # final learning rate = lr0 * (10 ** lrf)
+#        'momentum': 0.90,  # SGD momentum
+#        'weight_decay': 0.0005}  # optimizer weight decay
 
 
 #     0.0945      0.279      0.114      0.131         25      0.035        0.2        0.1      0.035         79       1.61       3.53       0.29      0.001         -4        0.9     0.0005   320 64-1
@@ -46,16 +59,27 @@ hyp = {'giou': 1.008,  # giou loss gain
 def train(
         cfg,
         data_cfg,
+        output_path,
         img_size=416,
         epochs=100,  # 500200 batches at bs 16, 117263 images = 273 epochs
         batch_size=8,
         accumulate=8,  # effective bs = batch_size * accumulate = 8 * 8 = 64
         freeze_backbone=False,
+        weights='weights',
+        trained_weights=None,
 ):
     init_seeds()
-    weights = 'weights' + os.sep
-    latest = weights + 'latest.pt'
-    best = weights + 'best.pt'
+
+    latest = os.path.join(weights, 'latest.pt')
+    best = os.path.join(weights, 'best.pt')
+
+    os.makedirs(output_path, exist_ok=True)
+
+    if trained_weights is None:
+        trained_weights = weights  # output the checkpoints to same directory of weights
+    else:
+        os.makedirs(trained_weights, exist_ok=True)
+
     device = torch_utils.select_device()
     img_size_test = img_size  # image size for testing
     multi_scale = not opt.single_scale
@@ -82,7 +106,7 @@ def train(
     nf = int(model.module_defs[model.yolo_layers[0] - 1]['filters'])  # yolo layer size (i.e. 255)
     if opt.resume or opt.transfer:  # Load previously saved model
         if opt.transfer:  # Transfer learning
-            chkpt = torch.load(weights + 'yolov3-spp.pt', map_location=device)
+            chkpt = torch.load(os.path.join(weights, 'yolov3-spp.pt'), map_location=device)
             model.load_state_dict({k: v for k, v in chkpt['model'].items() if v.numel() > 1 and v.shape[0] != 255},
                                   strict=False)
             for p in model.parameters():
@@ -100,9 +124,9 @@ def train(
 
     else:  # Initialize model with backbone (optional)
         if '-tiny.cfg' in cfg:
-            cutoff = load_darknet_weights(model, weights + 'yolov3-tiny.conv.15')
+            cutoff = load_darknet_weights(model, os.path.join(weights, 'yolov3-tiny.conv.15'))
         else:
-            cutoff = load_darknet_weights(model, weights + 'darknet53.conv.74')
+            cutoff = load_darknet_weights(model, os.path.join(weights, 'darknet53.conv.74'))
 
         # Remove old results
         for f in glob.glob('*_batch*.jpg') + glob.glob('results.txt'):
@@ -133,7 +157,8 @@ def train(
                                   img_size,
                                   batch_size,
                                   augment=True,
-                                  rect=rectangular_training)
+                                  rect=rectangular_training,
+                                  apply_cmap=True)
 
     # Initialize distributed training
     if torch.cuda.device_count() > 1:
@@ -206,7 +231,7 @@ def train(
 
             # Plot images with bounding boxes
             if epoch == 0 and i == 0:
-                plot_images(imgs=imgs, targets=targets, fname='train_batch%g.jpg' % i)
+                plot_images(imgs=imgs, targets=targets, fname=os.path.join(output_path, 'train_batch%g.jpg') % i)
 
             # SGD burn-in
             if epoch == 0 and i <= n_burnin:
@@ -250,11 +275,11 @@ def train(
         # Calculate mAP (always test final epoch, skip first 5 if opt.nosave)
         if not (opt.notest or (opt.nosave and epoch < 10)) or epoch == epochs - 1:
             with torch.no_grad():
-                results, maps = test.test(cfg, data_cfg, batch_size=batch_size, img_size=img_size_test, model=model,
+                results, maps = test.test(cfg, data_cfg, output_path, batch_size=batch_size, img_size=img_size_test, model=model,
                                           conf_thres=0.1)
 
         # Write epoch results
-        with open('results.txt', 'a') as file:
+        with open(os.path.join(output_path, 'results.txt'), 'a') as file:
             file.write(s + '%11.3g' * 5 % results + '\n')  # P, R, mAP, F1, test_loss
 
         # Update best map
@@ -281,7 +306,7 @@ def train(
 
             # Save backup every 10 epochs (optional)
             if epoch > 0 and epoch % 10 == 0:
-                torch.save(chkpt, weights + 'backup%g.pt' % epoch)
+                torch.save(chkpt, os.path.join(trained_weights, 'backup%g.pt') % epoch)
 
             # Delete checkpoint
             del chkpt
@@ -324,6 +349,12 @@ if __name__ == '__main__':
     parser.add_argument('--evolve', action='store_true', help='evolve hyperparameters')
     parser.add_argument('--cloud-evolve', action='store_true', help='evolve hyperparameters from a cloud source')
     parser.add_argument('--var', default=0, type=int, help='debug variable')
+    parser.add_argument('--output-path', type=str, default='output/', help='store results and batch jpgs')
+    parser.add_argument('--iou-t', type=float, default=0.5, help='Iou target-anchor training threshold')
+    parser.add_argument('--init-weights', type=str, default="/data/weights_yolov3", help='Iou target-anchor training threshold')
+    parser.add_argument('--trained-weights', type=str, default="/data/trained_yolov3", help='Iou target-anchor training threshold')
+
+
     opt = parser.parse_args()
     print(opt)
 
@@ -333,12 +364,17 @@ if __name__ == '__main__':
         opt.nosave = True  # only save final checkpoint
 
     # Train
+    hyp['iou_t'] = opt.iou_t
+
     results = train(opt.cfg,
                     opt.data_cfg,
+                    opt.output_path,
                     img_size=opt.img_size,
                     epochs=opt.epochs,
                     batch_size=opt.batch_size,
-                    accumulate=opt.accumulate)
+                    accumulate=opt.accumulate,
+                    weights=opt.init_weights,
+                    trained_weights=opt.trained_weights)
 
     # Evolve hyperparameters (optional)
     if opt.evolve:
